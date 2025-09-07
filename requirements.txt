@@ -1,5 +1,7 @@
 flask
 gunicorn
 PyMuPDF
+pytesseract
+pdf2image
 fuzzywuzzy
 python-Levenshtein
