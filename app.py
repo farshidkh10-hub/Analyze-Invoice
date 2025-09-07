@@ -2,16 +2,17 @@ import os
 from flask import Flask, request, jsonify
 import fitz  # PyMuPDF
 import re
+from fuzzywuzzy import fuzz
 
 app = Flask(__name__)
 
-# کلیدواژه‌ها برای استخراج اطلاعات
+# کلیدواژه‌ها
 beneficiary_keywords = ["ذینفع", "مشتری", "گیرنده"]
 total_keywords = ["جمع", "مبلغ کل", "Total", "Amount"]
 currency_keywords = ["ریال", "دلار", "USD", "EUR"]
 bank_keywords = ["بانک", "شماره حساب", "Account"]
 
-# مقدار مهر شرکت برای مقایسه اسم ذینفع
+# نام شرکت برای مقایسه
 COMPANY_SEAL_NAME = "شرکت نمونه"
 
 @app.route("/")
@@ -25,11 +26,11 @@ def analyze_invoice():
         return jsonify({"error": "No file uploaded"}), 400
 
     try:
-        # ذخیره موقت فایل PDF
+        # ذخیره موقت PDF
         temp_path = f"temp_{file.filename}"
         file.save(temp_path)
 
-        # استخراج متن با PyMuPDF
+        # استخراج متن
         doc = fitz.open(temp_path)
         text = ""
         for page in doc:
@@ -52,19 +53,19 @@ def analyze_invoice():
             if beneficiary != "Not found":
                 break
 
-        # بررسی مغایرت با مهر شرکت
-        discrepancy = beneficiary != COMPANY_SEAL_NAME
+        # fuzzy match برای مقایسه با مهر شرکت
+        similarity = fuzz.token_sort_ratio(beneficiary, COMPANY_SEAL_NAME)
+        discrepancy = similarity < 90  # کمتر از 90٪ یعنی مغایرت
 
-        # --- استخراج جمع کل ---
+        # --- استخراج جمع کل و ارز ---
         total_amount = None
         currency = None
         for line in lines:
             if any(kw in line for kw in total_keywords):
-                # عدد و ارز
                 amount_match = re.search(r"([\d,\.]+)", line)
                 currency_match = re.search(r"(ریال|دلار|USD|EUR)", line)
                 if amount_match:
-                    total_amount = amount_match.group(1)
+                    total_amount = amount_match.group(1).replace(",", "")
                 if currency_match:
                     currency = currency_match.group(1)
                 break
@@ -74,8 +75,8 @@ def analyze_invoice():
         account_number = None
         for line in lines:
             if any(kw in line for kw in bank_keywords):
-                bank_name_match = re.search(r"(بانک\s*[:\-]?\s*.+?)\s*(?:شماره|Account|$)", line)
-                account_match = re.search(r"(?:شماره\s*حساب|Account)\s*[:\-]?\s*([\d\-]+)", line)
+                bank_name_match = re.search(r"(?:بانک\s*[:\-]?\s*|Bank\s*[:\-]?\s*)(.+?)(?:\s+شماره|Account|$)", line, re.IGNORECASE)
+                account_match = re.search(r"(?:شماره\s*حساب|Account)\s*[:\-]?\s*([\d\-]+)", line, re.IGNORECASE)
                 if bank_name_match:
                     bank_name = bank_name_match.group(1).strip()
                 if account_match:
@@ -87,6 +88,7 @@ def analyze_invoice():
             "filename": file.filename,
             "beneficiary": beneficiary,
             "discrepancy_with_seal": discrepancy,
+            "similarity_percentage": similarity,
             "total_amount": total_amount,
             "currency": currency,
             "bank_name": bank_name,
