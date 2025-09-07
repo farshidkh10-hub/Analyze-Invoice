@@ -1,0 +1,7 @@
+Flask==2.2.5
+pdf2image==1.16.3
+pytesseract==0.3.11
+Pillow==9.5.0
+opencv-python==4.8.0.74
+numpy==1.26.4
+gunicorn==21.2.0
