@@ -7,10 +7,10 @@ from fuzzywuzzy import fuzz
 app = Flask(__name__)
 
 # کلیدواژه‌ها و نام شرکت برای مقایسه
-beneficiary_keywords = ["Beneficiary", "Customer", "Recipient"]
-total_keywords = ["Total", "Amount"]
-currency_keywords = ["USD", "EUR", "JPY", "GBP"]
-bank_keywords = ["Bank", "Account Number"]
+beneficiary_keywords = ["Beneficiary", "Customer", "SELLER"]
+total_keywords = ["TOTAL AMOUNT", "Amount"]
+currency_keywords = ["USD", "EUR", "AED", "RPM"]
+bank_keywords = ["Bank Name", "Account Number"]
 COMPANY_SEAL_NAME = "Example Company"
 
 HTML_PAGE = """
