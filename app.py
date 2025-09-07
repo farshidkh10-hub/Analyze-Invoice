@@ -6,11 +6,31 @@ from fuzzywuzzy import fuzz
 
 app = Flask(__name__)
 
-# کلیدواژه‌ها و نام شرکت برای مقایسه
-beneficiary_keywords = ["Beneficiary", "Customer", "SELLER"]
-total_keywords = ["TOTAL AMOUNT", "AMOUNT"]
-currency_keywords = ["DOLLAR", "EURO", "DIRHAM", "RPM"]
-bank_keywords = ["Bank Name","A/C No.", "Account Number"]
+# لیست کامل کلیدواژه‌ها
+beneficiary_keywords = [
+    "Beneficiary's Name",
+    "Beneficiary Name"
+]
+
+bank_keywords = [
+    "Bank Address",
+    "Address",
+    "Beneficiary’s Bank",
+    "Bank information"
+]
+
+account_keywords = [
+    "ACCOUNT NO.",
+    "Account Number"
+]
+
+total_keywords = [
+    "Total amount",
+    "AMOUNT"
+]
+
+currency_keywords = ["USD", "EUR", "JPY", "GBP"]
+
 COMPANY_SEAL_NAME = "Example Company"
 
 HTML_PAGE = """
@@ -81,7 +101,6 @@ def analyze_invoice():
         temp_path = f"temp_{file.filename}"
         file.save(temp_path)
 
-        # استخراج متن PDF
         doc = fitz.open(temp_path)
         text = "".join([page.get_text("text") + "\n" for page in doc])
         doc.close()
@@ -93,7 +112,7 @@ def analyze_invoice():
         beneficiary = "Not found"
         for i, line in enumerate(lines):
             for kw in beneficiary_keywords:
-                if kw in line:
+                if kw.lower() in line.lower():
                     parts = line.split(kw)
                     if len(parts) > 1 and parts[1].strip():
                         beneficiary = parts[1].strip(": - ")
@@ -109,7 +128,7 @@ def analyze_invoice():
         total_amount = None
         currency = None
         for line in lines:
-            if any(kw in line for kw in total_keywords):
+            if any(kw.lower() in line.lower() for kw in total_keywords):
                 amt = re.search(r"([\d,\.]+)", line)
                 cur = re.search(r"(" + "|".join(currency_keywords) + ")", line)
                 if amt: total_amount = amt.group(1).replace(",", "")
@@ -119,13 +138,19 @@ def analyze_invoice():
         # --- Bank & Account Number ---
         bank_name = None
         account_number = None
-        for line in lines:
-            if any(kw in line for kw in bank_keywords):
-                bn = re.search(r"(?:Bank\s*[:\-]?\s*)(.+?)(?:Account|$)", line, re.IGNORECASE)
-                ac = re.search(r"(?:Account\s*Number\s*[:\-]?\s*)([\d\-]+)", line, re.IGNORECASE)
-                if bn: bank_name = bn.group(1).strip()
-                if ac: account_number = ac.group(1).strip()
-                if bank_name or account_number: break
+        for i, line in enumerate(lines):
+            if any(kw.lower() in line.lower() for kw in bank_keywords):
+                if i+1 < len(lines):  # بانک معمولا در خط بعدی ذکر می‌شود
+                    bank_name = lines[i+1].strip()
+                break
+        for i, line in enumerate(lines):
+            if any(kw.lower() in line.lower() for kw in account_keywords):
+                parts = re.split(r"[:\-]", line)
+                if len(parts) > 1 and parts[1].strip():
+                    account_number = parts[1].strip()
+                elif i+1 < len(lines):
+                    account_number = lines[i+1].strip()
+                break
 
         return {
             "filename": file.filename,
