@@ -8,9 +8,9 @@ app = Flask(__name__)
 
 # کلیدواژه‌ها و نام شرکت برای مقایسه
 beneficiary_keywords = ["Beneficiary", "Customer", "SELLER"]
-total_keywords = ["TOTAL AMOUNT", "Amount"]
-currency_keywords = ["USD", "EUR", "AED", "RPM"]
-bank_keywords = ["Bank Name", "Account Number"]
+total_keywords = ["TOTAL AMOUNT", "AMOUNT"]
+currency_keywords = ["DOLLAR", "EURO", "DIRHAM", "RPM"]
+bank_keywords = ["Bank Name","A/C No.", "Account Number"]
 COMPANY_SEAL_NAME = "Example Company"
 
 HTML_PAGE = """
