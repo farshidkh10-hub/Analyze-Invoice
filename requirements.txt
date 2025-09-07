@@ -1,3 +1,5 @@
- flask
- gunicorn
- PyMuPDF
+flask
+gunicorn
+PyMuPDF
+fuzzywuzzy
+python-Levenshtein
