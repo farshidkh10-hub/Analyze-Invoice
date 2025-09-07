@@ -6,27 +6,37 @@ from fuzzywuzzy import fuzz
 
 app = Flask(__name__)
 
-# لیست کامل کلیدواژه‌ها
+# کلیدواژه‌های ذینفع
 beneficiary_keywords = [
     "Beneficiary's Name",
-    "Beneficiary Name"
+    "Beneficiary Name",
+    "SELLER"
 ]
 
+# کلیدواژه‌های بانک
 bank_keywords = [
     "Bank Address",
     "Address",
     "Beneficiary’s Bank",
-    "Bank information"
+    "Bank information",
+    "Banking information",
+    "BANK",
+    "BANK ADDRESS",
+    "ADD"
 ]
 
+# کلیدواژه‌های شماره حساب
 account_keywords = [
     "ACCOUNT NO.",
-    "Account Number"
+    "Account Number",
+    "A/C NO"
 ]
 
+# کلیدواژه‌های جمع کل
 total_keywords = [
     "Total amount",
-    "AMOUNT"
+    "AMOUNT",
+    "TOTAL"
 ]
 
 currency_keywords = ["USD", "EUR", "JPY", "GBP"]
@@ -140,7 +150,7 @@ def analyze_invoice():
         account_number = None
         for i, line in enumerate(lines):
             if any(kw.lower() in line.lower() for kw in bank_keywords):
-                if i+1 < len(lines):  # بانک معمولا در خط بعدی ذکر می‌شود
+                if i+1 < len(lines):
                     bank_name = lines[i+1].strip()
                 break
         for i, line in enumerate(lines):
