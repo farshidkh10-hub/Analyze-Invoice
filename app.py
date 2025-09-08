@@ -2,35 +2,17 @@ import os
 from flask import Flask, request, render_template_string
 import fitz  # PyMuPDF
 import re
-from fuzzywuzzy import fuzz
 
 app = Flask(__name__)
 
 # ----------------------------
-# لیست کلیدواژه‌ها (همه به lowercase)
+# لیست کلیدواژه‌ها (همه lowercase)
 # ----------------------------
 beneficiary_keywords = [
     "beneficiary's name",
     "beneficiary name",
     "seller",
     "company name"
-]
-
-bank_keywords = [
-    "bank address",
-    "address",
-    "beneficiary’s bank",
-    "bank information",
-    "banking information",
-    "bank",
-    "add"
-]
-
-account_keywords = [
-    "account no.",
-    "account number",
-    "a/c no",
-    "account no"
 ]
 
 total_keywords = [
@@ -41,14 +23,7 @@ total_keywords = [
     "total value"
 ]
 
-swift_keywords = [
-    "swift",
-    "swift code"
-]
-
 currency_keywords = ["usd", "eur", "jpy", "gbp"]
-
-COMPANY_SEAL_NAME = "Example Company"
 
 # ----------------------------
 # HTML صفحه وب
@@ -91,8 +66,6 @@ function uploadFile() {
         html += '<tr><th>Field</th><th>Value</th></tr>';
         html += `<tr><td>File Name</td><td>${data.filename}</td></tr>`;
         html += `<tr><td>Beneficiary Name</td><td>${data.beneficiary}</td></tr>`;
-        html += `<tr><td>Discrepancy with Company</td><td>${data.discrepancy_with_seal ? 'Yes' : 'No'}</td></tr>`;
-        html += `<tr><td>Similarity Percentage</td><td>${data.similarity_percentage}%</td></tr>`;
         html += `<tr><td>Total Amount</td><td>${data.total_amount || '-'}</td></tr>`;
         html += `<tr><td>Currency</td><td>${data.currency || '-'}</td></tr>`;
         html += `<tr><td>Bank Name</td><td>${data.bank_name || '-'}</td></tr>`;
@@ -131,7 +104,7 @@ def analyze_invoice():
         doc.close()
         os.remove(temp_path)
 
-        lines = text.split("\n")
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
 
         # --- Beneficiary ---
         beneficiary = "Not found"
@@ -146,41 +119,47 @@ def analyze_invoice():
                     break
             if beneficiary != "Not found": break
 
-        similarity = fuzz.token_sort_ratio(beneficiary, COMPANY_SEAL_NAME)
-        discrepancy = similarity < 90
-
         # --- Total Amount & Currency ---
         total_amount = None
         currency = None
         for line in lines:
             if any(kw in line.lower() for kw in total_keywords):
-                amt = re.search(r"([\d,\.]+)", line)
-                cur = re.search(r"(" + "|".join(currency_keywords) + ")", line.lower())
-                if amt: total_amount = amt.group(1).replace(",", "")
-                if cur: currency = cur.group(1).upper()
+                match = re.search(r"([A-Z]{3})\s*([\d,\.]+)", line, re.IGNORECASE)
+                if match:
+                    currency = match.group(1).upper()
+                    total_amount = match.group(2).replace(",", "")
+                else:
+                    amt = re.search(r"([\d,\.]+)", line)
+                    cur = re.search(r"(usd|eur|jpy|gbp)", line.lower())
+                    if amt: total_amount = amt.group(1).replace(",", "")
+                    if cur: currency = cur.group(1).upper()
                 break
 
-        # --- Bank Name & Address ---
+        # --- Bank Name ---
         bank_name = None
-        bank_address = None
         for i, line in enumerate(lines):
-            if any(kw in line.lower() for kw in bank_keywords):
-                if i+1 < len(lines):
-                    bank_name = lines[i+1].strip()
+            if "bank:" in line.lower():
+                bank_name = line.split(":", 1)[1].strip()
+                # خواندن خط‌های بعدی هم (برای حالت چندخطی)
+                j = i + 1
+                while j < len(lines) and not any(k in lines[j].lower() for k in ["address", "swift", "a/c no", "account"]):
+                    bank_name += " " + lines[j].strip()
+                    j += 1
                 break
 
-        bank_address = bank_name
-        for i, line in enumerate(lines):
-            if "address" in line.lower():
-                bank_address = line.split(":")[-1].strip()
+        # --- Bank Address ---
+        bank_address = None
+        for line in lines:
+            if "bank address" in line.lower():
+                bank_address = line.split(":", 1)[1].strip()
                 break
 
         # --- Swift Code ---
         swift_code = None
         for i, line in enumerate(lines):
-            if any(kw in line.lower() for kw in swift_keywords):
-                parts = re.split(r"[:\-]", line, maxsplit=1)
-                if len(parts) > 1 and parts[1].strip():
+            if "swift" in line.lower():
+                parts = line.split(":", 1)
+                if len(parts) > 1:
                     swift_code = parts[1].strip()
                 elif i+1 < len(lines):
                     swift_code = lines[i+1].strip()
@@ -189,9 +168,9 @@ def analyze_invoice():
         # --- Account Number ---
         account_number = None
         for i, line in enumerate(lines):
-            if any(kw in line.lower() for kw in account_keywords):
-                parts = re.split(r"[:\-]", line, maxsplit=1)
-                if len(parts) > 1 and parts[1].strip():
+            if "a/c no" in line.lower() or "account" in line.lower():
+                parts = line.split(":", 1)
+                if len(parts) > 1:
                     account_number = parts[1].strip()
                 elif i+1 < len(lines):
                     account_number = lines[i+1].strip()
@@ -200,8 +179,6 @@ def analyze_invoice():
         return {
             "filename": file.filename,
             "beneficiary": beneficiary,
-            "discrepancy_with_seal": discrepancy,
-            "similarity_percentage": similarity,
             "total_amount": total_amount,
             "currency": currency,
             "bank_name": bank_name,
