@@ -85,9 +85,12 @@ function uploadFile() {
 # تابع امن برای تبدیل Amount به float
 # ----------------------------
 def parse_amount(s):
-    s_clean = re.sub(r"[^0-9.]", "", s)  # فقط اعداد و نقطه
+    # حذف همه چیز به جز اعداد، نقطه و کاما
+    s_clean = re.sub(r"[^0-9.,]", "", s)
     if s_clean == "":
         return None
+    # حذف کاماهای جداکننده هزار
+    s_clean = s_clean.replace(",", "")
     try:
         return float(s_clean)
     except:
