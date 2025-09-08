@@ -43,10 +43,64 @@ suspicious_banks = [
 # ----------------------------
 # HTML صفحه وب
 # ----------------------------
-HTML_PAGE = """ ... همان HTML صفحه قبلی ... """  # همون HTML که داری استفاده می‌کنی
+HTML_PAGE = """  
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Analyze Invoice</title>
+<style>
+body { font-family: Arial, sans-serif; padding: 20px; }
+table { border-collapse: collapse; width: 90%; margin-top: 20px; }
+th, td { border: 1px solid #333; padding: 8px; text-align: left; }
+th { background-color: #f2f2f2; }
+</style>
+</head>
+<body>
+<h2>Upload PDF Invoice and Analyze</h2>
+<input type="file" id="fileInput" accept="application/pdf">
+<button onclick="uploadFile()">Analyze</button>
+<div id="result"></div>
+
+<script>
+function uploadFile() {
+    const fileInput = document.getElementById('fileInput');
+    if(fileInput.files.length === 0) { alert('Please select a file!'); return; }
+    const file = fileInput.files[0];
+    const formData = new FormData();
+    formData.append('file', file);
+
+    fetch('/analyze', { method: 'POST', body: formData })
+    .then(response => response.json())
+    .then(data => {
+        if(data.error) {
+            document.getElementById('result').innerHTML = '<p style="color:red;">' + data.error + '</p>';
+            return;
+        }
+        let html = '<table>';
+        html += '<tr><th>Field</th><th>Value</th></tr>';
+        html += `<tr><td>File Name</td><td>${data.filename}</td></tr>`;
+        html += `<tr><td>Beneficiary Name</td><td>${data.beneficiary}</td></tr>`;
+        html += `<tr><td>Total Amount</td><td>${data.total_amount || '-'}</td></tr>`;
+        html += `<tr><td>Currency</td><td>${data.currency || '-'}</td></tr>`;
+        html += `<tr><td>Bank Name</td><td>${data.bank_name || '-'}</td></tr>`;
+        html += `<tr><td>Bank Address</td><td>${data.bank_address || '-'}</td></tr>`;
+        html += `<tr><td>Swift Code</td><td>${data.swift_code || '-'}</td></tr>`;
+        html += `<tr><td>Account Number</td><td>${data.account_number || '-'}</td></tr>`;
+        html += `<tr><td>Verification (Currency)</td><td>${data.verification_currency}</td></tr>`;
+        html += `<tr><td>Verification (Bank)</td><td>${data.verification_bank}</td></tr>`;
+        html += '</table>';
+        document.getElementById('result').innerHTML = html;
+    })
+    .catch(err => { document.getElementById('result').innerHTML = '<p style="color:red;">Error: '+err+'</p>'; });
+}
+</script>
+</body>
+</html>
+"""
 
 # ----------------------------
-# تابع امن برای تبدیل Amount به float
+# توابع کمکی
 # ----------------------------
 def parse_amount(s):
     s_clean = re.sub(r"[^0-9.,]", "", s)
@@ -58,9 +112,6 @@ def parse_amount(s):
     except:
         return None
 
-# ----------------------------
-# تابع امن برای استانداردسازی نام بانک
-# ----------------------------
 def sanitize_bank_name(name):
     return re.sub(r"[^A-Za-z0-9\s]", "", name).upper().strip()
 
@@ -76,13 +127,11 @@ def analyze_invoice():
     file = request.files.get("file")
     if not file:
         return {"error": "No file uploaded"}, 400
-
     try:
         pdf_bytes = file.read()
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         text = "".join([page.get_text("text") + "\n" for page in doc])
         doc.close()
-
         lines = [line.strip() for line in text.split("\n") if line.strip()]
 
         # --- Beneficiary ---
@@ -104,7 +153,7 @@ def analyze_invoice():
                     beneficiary = line.strip()
                     break
 
-        # --- Total Amount & Currency ---
+        # --- Total & Currency ---
         total_amount = None
         currency = None
         for line in lines:
@@ -117,7 +166,6 @@ def analyze_invoice():
                 if currencies:
                     currency = currencies[0].upper()
                 break
-
         if not total_amount:
             all_amounts = [parse_amount(a) for a in re.findall(r"([\d,]+\.\d+|[\d,]+)", text)]
             all_amounts = [a for a in all_amounts if a is not None]
@@ -127,13 +175,12 @@ def analyze_invoice():
             if cur_match:
                 currency = cur_match.group(1).upper()
 
-        # --- Banking Information ---
+        # --- Banking ---
         bank_name = "Not found"
         bank_address = "Not found"
         swift_code = "Not found"
         account_number = "Not found"
-
-        for i, line in enumerate(lines):
+        for line in lines:
             l = line.strip()
             l_lower = l.lower()
             if (("bank" in l_lower or "bank name" in l_lower) and bank_name == "Not found"):
@@ -142,18 +189,11 @@ def analyze_invoice():
                 bank_address = l.split(":",1)[-1].strip() if ":" in l else l.strip()
             if ("swift" in l_lower and swift_code == "Not found"):
                 match = re.search(r"\b[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?\b", l)
-                if match:
-                    swift_code = match.group(0)
-                else:
-                    swift_code = l.split(":",1)[-1].strip() if ":" in l else l.strip()
+                swift_code = match.group(0) if match else l.split(":",1)[-1].strip() if ":" in l else l.strip()
             if (("account" in l_lower or "a/c" in l_lower) and account_number == "Not found"):
                 match = re.search(r"\d{6,}", l.replace(" ", ""))
-                if match:
-                    account_number = match.group(0)
-                else:
-                    account_number = l.split(":",1)[-1].strip() if ":" in l else l.strip()
-
-        # fallback روی کل متن
+                account_number = match.group(0) if match else l.split(":",1)[-1].strip() if ":" in l else l.strip()
+        # fallback
         if bank_name == "Not found":
             bank_match = re.search(r"Bank\s*[:\-]?\s*([\w\s&]+)", text, re.IGNORECASE)
             if bank_match:
@@ -171,12 +211,8 @@ def analyze_invoice():
         bank_name_std = sanitize_bank_name(bank_name)
         verification_currency = "تایید شده"
         verification_bank = "تایید شده"
-
-        # ارز USD خارج از چین
         if currency == "USD" and "CHINA" not in bank_name_std:
             verification_currency = "تایید نشده"
-
-        # بانک‌های حساس
         for b in suspicious_banks:
             if sanitize_bank_name(b) in bank_name_std:
                 verification_bank = "تایید نشده"
@@ -197,7 +233,6 @@ def analyze_invoice():
 
     except Exception as e:
         return {"error": str(e)}, 500
-
 
 if __name__ == "__main__":
     import os
