@@ -7,15 +7,17 @@ def analyze_invoice():
         return {"error": "No file uploaded"}, 400
 
     try:
-        # --- خواندن PDF مستقیم از حافظه ---
         pdf_bytes = file.read()
         try:
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         except Exception as pdf_err:
             return {"error": f"Cannot open PDF: {str(pdf_err)}"}, 400
 
+        text = ""
+        # --- خواندن صفحات یکی یکی برای کاهش مصرف حافظه ---
         try:
-            text = "".join([page.get_text("text") + "\n" for page in doc])
+            for page in doc:
+                text += page.get_text("text") + "\n"
         except Exception as text_err:
             doc.close()
             return {"error": f"Cannot extract text from PDF: {str(text_err)}"}, 400
