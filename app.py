@@ -1,3 +1,95 @@
+import os
+import re
+import tempfile
+from flask import Flask, request, render_template_string
+import fitz  # PyMuPDF
+
+app = Flask(__name__)
+
+# ----------------------------
+# کلیدواژه‌ها (همه lowercase)
+# ----------------------------
+beneficiary_keywords = [
+    "beneficiary's name",
+    "beneficiary name",
+    "seller",
+    "company name"
+]
+
+total_keywords = [
+    "total amount",
+    "amount",
+    "total",
+    "cif value",
+    "total value"
+]
+
+currency_keywords = ["usd", "eur", "jpy", "gbp"]
+
+# ----------------------------
+# HTML صفحه وب
+# ----------------------------
+HTML_PAGE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Analyze Invoice</title>
+<style>
+body { font-family: Arial, sans-serif; padding: 20px; }
+table { border-collapse: collapse; width: 90%; margin-top: 20px; }
+th, td { border: 1px solid #333; padding: 8px; text-align: left; }
+th { background-color: #f2f2f2; }
+</style>
+</head>
+<body>
+<h2>Upload PDF Invoice and Analyze</h2>
+<input type="file" id="fileInput" accept="application/pdf">
+<button onclick="uploadFile()">Analyze</button>
+<div id="result"></div>
+
+<script>
+function uploadFile() {
+    const fileInput = document.getElementById('fileInput');
+    if(fileInput.files.length === 0) { alert('Please select a file!'); return; }
+    const file = fileInput.files[0];
+    const formData = new FormData();
+    formData.append('file', file);
+
+    fetch('/analyze', { method: 'POST', body: formData })
+    .then(response => response.json())
+    .then(data => {
+        if(data.error) {
+            document.getElementById('result').innerHTML = '<p style="color:red;">' + data.error + '</p>';
+            return;
+        }
+        let html = '<table>';
+        html += '<tr><th>Field</th><th>Value</th></tr>';
+        html += `<tr><td>File Name</td><td>${data.filename}</td></tr>`;
+        html += `<tr><td>Beneficiary Name</td><td>${data.beneficiary}</td></tr>`;
+        html += `<tr><td>Total Amount</td><td>${data.total_amount || '-'}</td></tr>`;
+        html += `<tr><td>Currency</td><td>${data.currency || '-'}</td></tr>`;
+        html += `<tr><td>Bank Name</td><td>${data.bank_name || '-'}</td></tr>`;
+        html += `<tr><td>Bank Address</td><td>${data.bank_address || '-'}</td></tr>`;
+        html += `<tr><td>Swift Code</td><td>${data.swift_code || '-'}</td></tr>`;
+        html += `<tr><td>Account Number</td><td>${data.account_number || '-'}</td></tr>`;
+        html += '</table>';
+        document.getElementById('result').innerHTML = html;
+    })
+    .catch(err => { document.getElementById('result').innerHTML = '<p style="color:red;">Error: '+err+'</p>'; });
+}
+</script>
+</body>
+</html>
+"""
+
+# ----------------------------
+# Route ها
+# ----------------------------
+@app.route("/")
+def home():
+    return render_template_string(HTML_PAGE)
+
 @app.route("/analyze", methods=["POST"])
 def analyze_invoice():
     file = request.files.get("file")
@@ -5,14 +97,16 @@ def analyze_invoice():
         return {"error": "No file uploaded"}, 400
 
     try:
-        temp_path = f"temp_{file.filename}"
-        file.save(temp_path)
+        # ایجاد فایل موقت امن
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp:
+            temp_path = temp.name
+            file.save(temp_path)
 
-        # خواندن متن PDF
+        # باز کردن PDF
         doc = fitz.open(temp_path)
         text = "".join([page.get_text("text") + "\n" for page in doc])
         doc.close()
-        os.remove(temp_path)
+        os.remove(temp_path)  # حذف فایل موقت
 
         lines = [line.strip() for line in text.split("\n") if line.strip()]
 
@@ -29,8 +123,6 @@ def analyze_invoice():
                     break
             if beneficiary != "Not found":
                 break
-
-        # fallback: جستجو در کل متن اگر هنوز پیدا نشده
         if beneficiary == "Not found":
             for line in lines:
                 if len(line.split()) <= 5 and line.isalpha():
@@ -50,8 +142,6 @@ def analyze_invoice():
                 if currencies:
                     currency = currencies[0].upper()
                 break
-
-        # fallback: جستجو در کل متن برای عدد بزرگ و واحد ارز
         if not total_amount:
             all_amounts = re.findall(r"([\d,]+\.\d+|[\d,]+)", text)
             if all_amounts:
@@ -66,28 +156,19 @@ def analyze_invoice():
         swift_code = "Not found"
         account_number = "Not found"
 
-        # جستجو در خطوط برای بانک
         for i, line in enumerate(lines):
             l = line.strip()
             l_lower = l.lower()
-
-            # نام بانک: شامل 'bank' یا 'bank name' باشد
-            if ("bank" in l_lower and bank_name == "Not found") or ("bank name" in l_lower):
+            if (("bank" in l_lower or "bank name" in l_lower) and bank_name == "Not found"):
                 bank_name = l.split(":",1)[-1].strip() if ":" in l else l.strip()
-
-            # آدرس بانک
-            elif ("address" in l_lower and bank_address == "Not found") or ("bank address" in l_lower):
+            elif ("address" in l_lower and bank_address == "Not found"):
                 bank_address = l.split(":",1)[-1].strip() if ":" in l else l.strip()
-
-            # Swift Code
             if ("swift" in l_lower and swift_code == "Not found"):
                 match = re.search(r"\b[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?\b", l)
                 if match:
                     swift_code = match.group(0)
                 else:
                     swift_code = l.split(":",1)[-1].strip() if ":" in l else l.strip()
-
-            # Account Number
             if (("account" in l_lower or "a/c" in l_lower) and account_number == "Not found"):
                 match = re.search(r"\d{6,}", l.replace(" ", ""))
                 if match:
@@ -95,9 +176,8 @@ def analyze_invoice():
                 else:
                     account_number = l.split(":",1)[-1].strip() if ":" in l else l.strip()
 
-        # fallback: اگر هنوز چیزی پیدا نشده، regex روی کل متن
         if bank_name == "Not found":
-            bank_match = re.search(r"Bank\s*[:\-]?\s*(\w[\w\s&]+)", text, re.IGNORECASE)
+            bank_match = re.search(r"Bank\s*[:\-]?\s*([\w\s&]+)", text, re.IGNORECASE)
             if bank_match:
                 bank_name = bank_match.group(1).strip()
         if swift_code == "Not found":
@@ -122,3 +202,8 @@ def analyze_invoice():
 
     except Exception as e:
         return {"error": str(e)}, 500
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
