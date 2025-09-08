@@ -13,6 +13,7 @@ beneficiary_keywords = [
     "Beneficiary's Name",
     "Beneficiary Name",
     "SELLER"
+    "COMPANY NAME"
 ]
 
 bank_keywords = [
@@ -30,6 +31,7 @@ account_keywords = [
     "ACCOUNT NO.",
     "Account Number",
     "A/C NO"
+    "ACCOUNT NO"
 ]
 
 total_keywords = [
