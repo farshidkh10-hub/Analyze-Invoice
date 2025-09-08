@@ -82,6 +82,18 @@ function uploadFile() {
 """
 
 # ----------------------------
+# تابع امن برای تبدیل Amount به float
+# ----------------------------
+def parse_amount(s):
+    s_clean = re.sub(r"[^0-9.]", "", s)  # فقط اعداد و نقطه
+    if s_clean == "":
+        return None
+    try:
+        return float(s_clean)
+    except:
+        return None
+
+# ----------------------------
 # Route ها
 # ----------------------------
 @app.route("/")
@@ -127,18 +139,20 @@ def analyze_invoice():
         currency = None
         for line in lines:
             if any(kw in line.lower() for kw in total_keywords):
-                amounts = [a.replace(",", "") for a in re.findall(r"([\d,]+\.\d+|[\d,]+)", line) if a.strip() != ""]
+                amounts = [parse_amount(a) for a in re.findall(r"([\d,]+\.\d+|[\d,]+)", line)]
+                amounts = [a for a in amounts if a is not None]
                 currencies = re.findall(r"\b(usd|eur|jpy|gbp)\b", line, re.IGNORECASE)
                 if amounts:
-                    total_amount = str(max([float(a) for a in amounts]))
+                    total_amount = str(max(amounts))
                 if currencies:
                     currency = currencies[0].upper()
                 break
 
         if not total_amount:
-            all_amounts = [a.replace(",", "") for a in re.findall(r"([\d,]+\.\d+|[\d,]+)", text) if a.strip() != ""]
+            all_amounts = [parse_amount(a) for a in re.findall(r"([\d,]+\.\d+|[\d,]+)", text)]
+            all_amounts = [a for a in all_amounts if a is not None]
             if all_amounts:
-                total_amount = str(max([float(a) for a in all_amounts]))
+                total_amount = str(max(all_amounts))
             cur_match = re.search(r"\b(usd|eur|jpy|gbp)\b", text, re.IGNORECASE)
             if cur_match:
                 currency = cur_match.group(1).upper()
