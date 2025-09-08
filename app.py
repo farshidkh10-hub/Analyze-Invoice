@@ -14,15 +14,33 @@ beneficiary_keywords = [
     "company name"
 ]
 
-total_keywords = [
-    "total amount",
-    "amount",
-    "total",
-    "cif value",
-    "total value"
-]
+# ----------------------------
+# Mapping ارزها به فرمت استاندارد
+# ----------------------------
+currencies_map = {
+    "CNY": "CNY",
+    "Dollar": "USD",
+    "USD": "USD",
+    "EURO": "EUR",
+    "AED": "AED",
+    "DIRHAM": "AED"
+}
 
-currency_keywords = ["usd", "eur", "jpy", "gbp"]
+# ----------------------------
+# لیست بانک‌های حساس
+# ----------------------------
+suspicious_banks = [
+    "STANDARD CHARTERED",
+    "DBS HONG KONG",
+    "CITI BANK HONG KONG",
+    "HSBC",
+    "BANK OF CHINA",
+    "CHASE BANK",
+    "KUNLUN BANK",
+    "UCO BANK",
+    "CHOUZHOU",
+    "JP MORGAN"
+]
 
 # ----------------------------
 # HTML صفحه وب
@@ -65,12 +83,12 @@ function uploadFile() {
         html += '<tr><th>Field</th><th>Value</th></tr>';
         html += `<tr><td>File Name</td><td>${data.filename}</td></tr>`;
         html += `<tr><td>Beneficiary Name</td><td>${data.beneficiary}</td></tr>`;
-        html += `<tr><td>Total Amount</td><td>${data.total_amount || '-'}</td></tr>`;
         html += `<tr><td>Currency</td><td>${data.currency || '-'}</td></tr>`;
         html += `<tr><td>Bank Name</td><td>${data.bank_name || '-'}</td></tr>`;
         html += `<tr><td>Bank Address</td><td>${data.bank_address || '-'}</td></tr>`;
         html += `<tr><td>Swift Code</td><td>${data.swift_code || '-'}</td></tr>`;
         html += `<tr><td>Account Number</td><td>${data.account_number || '-'}</td></tr>`;
+        html += `<tr><td>Verification Status</td><td>${data.verification_status}</td></tr>`;
         html += '</table>';
         document.getElementById('result').innerHTML = html;
     })
@@ -82,19 +100,10 @@ function uploadFile() {
 """
 
 # ----------------------------
-# تابع امن برای تبدیل Amount به float
+# تابع امن برای استخراج نام بانک
 # ----------------------------
-def parse_amount(s):
-    # حذف همه چیز به جز اعداد، نقطه و کاما
-    s_clean = re.sub(r"[^0-9.,]", "", s)
-    if s_clean == "":
-        return None
-    # حذف کاماهای جداکننده هزار
-    s_clean = s_clean.replace(",", "")
-    try:
-        return float(s_clean)
-    except:
-        return None
+def sanitize_bank_name(name):
+    return re.sub(r"[^A-Za-z0-9\s]", "", name).upper().strip()
 
 # ----------------------------
 # Route ها
@@ -131,34 +140,13 @@ def analyze_invoice():
                     break
             if beneficiary != "Not found":
                 break
-        if beneficiary == "Not found":
-            for line in lines:
-                if len(line.split()) <= 5 and line.isalpha():
-                    beneficiary = line.strip()
-                    break
 
-        # --- Total Amount & Currency ---
-        total_amount = None
+        # --- Currency ---
         currency = None
-        for line in lines:
-            if any(kw in line.lower() for kw in total_keywords):
-                amounts = [parse_amount(a) for a in re.findall(r"([\d,]+\.\d+|[\d,]+)", line)]
-                amounts = [a for a in amounts if a is not None]
-                currencies = re.findall(r"\b(usd|eur|jpy|gbp)\b", line, re.IGNORECASE)
-                if amounts:
-                    total_amount = str(max(amounts))
-                if currencies:
-                    currency = currencies[0].upper()
+        for c in currencies_map.keys():
+            if c.lower() in text.lower():
+                currency = currencies_map[c]
                 break
-
-        if not total_amount:
-            all_amounts = [parse_amount(a) for a in re.findall(r"([\d,]+\.\d+|[\d,]+)", text)]
-            all_amounts = [a for a in all_amounts if a is not None]
-            if all_amounts:
-                total_amount = str(max(all_amounts))
-            cur_match = re.search(r"\b(usd|eur|jpy|gbp)\b", text, re.IGNORECASE)
-            if cur_match:
-                currency = cur_match.group(1).upper()
 
         # --- Banking Information ---
         bank_name = "Not found"
@@ -174,41 +162,34 @@ def analyze_invoice():
             elif ("address" in l_lower and bank_address == "Not found"):
                 bank_address = l.split(":",1)[-1].strip() if ":" in l else l.strip()
             if ("swift" in l_lower and swift_code == "Not found"):
-                match = re.search(r"\b[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?\b", l)
-                if match:
-                    swift_code = match.group(0)
-                else:
-                    swift_code = l.split(":",1)[-1].strip() if ":" in l else l.strip()
+                swift_code = l.split(":",1)[-1].strip() if ":" in l else l.strip()
             if (("account" in l_lower or "a/c" in l_lower) and account_number == "Not found"):
-                match = re.search(r"\d{6,}", l.replace(" ", ""))
-                if match:
-                    account_number = match.group(0)
-                else:
-                    account_number = l.split(":",1)[-1].strip() if ":" in l else l.strip()
+                account_number = l.split(":",1)[-1].strip() if ":" in l else l.strip()
 
-        # fallback روی کل متن
-        if bank_name == "Not found":
-            bank_match = re.search(r"Bank\s*[:\-]?\s*([\w\s&]+)", text, re.IGNORECASE)
-            if bank_match:
-                bank_name = bank_match.group(1).strip()
-        if swift_code == "Not found":
-            swift_match = re.search(r"\b[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?\b", text)
-            if swift_match:
-                swift_code = swift_match.group(0)
-        if account_number == "Not found":
-            acc_match = re.search(r"\b\d{6,}\b", text.replace(" ", ""))
-            if acc_match:
-                account_number = acc_match.group(0)
+        bank_name_std = sanitize_bank_name(bank_name)
+
+        # --- Verification ---
+        verification_status = "تایید شده"
+
+        # شرط 1: اگر ارز USD است و بانک شامل China نیست
+        if currency == "USD" and "CHINA" not in bank_name_std:
+            verification_status = "تایید نشده"
+
+        # شرط 2: اگر اسم بانک در لیست حساس است
+        for b in suspicious_banks:
+            if b.upper() in bank_name_std:
+                verification_status = "تایید نشده"
+                break
 
         return {
             "filename": file.filename,
             "beneficiary": beneficiary,
-            "total_amount": total_amount,
             "currency": currency,
             "bank_name": bank_name,
             "bank_address": bank_address,
             "swift_code": swift_code,
-            "account_number": account_number
+            "account_number": account_number,
+            "verification_status": verification_status
         }
 
     except Exception as e:
