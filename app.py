@@ -127,18 +127,18 @@ def analyze_invoice():
         currency = None
         for line in lines:
             if any(kw in line.lower() for kw in total_keywords):
-                amounts = re.findall(r"([\d,]+\.\d+|[\d,]+)", line)
+                amounts = [a.replace(",", "") for a in re.findall(r"([\d,]+\.\d+|[\d,]+)", line) if a.strip() != ""]
                 currencies = re.findall(r"\b(usd|eur|jpy|gbp)\b", line, re.IGNORECASE)
                 if amounts:
-                    total_amount = max([float(a.replace(",", "")) for a in amounts])
-                    total_amount = str(total_amount)
+                    total_amount = str(max([float(a) for a in amounts]))
                 if currencies:
                     currency = currencies[0].upper()
                 break
+
         if not total_amount:
-            all_amounts = re.findall(r"([\d,]+\.\d+|[\d,]+)", text)
+            all_amounts = [a.replace(",", "") for a in re.findall(r"([\d,]+\.\d+|[\d,]+)", text) if a.strip() != ""]
             if all_amounts:
-                total_amount = str(max([float(a.replace(",", "")) for a in all_amounts]))
+                total_amount = str(max([float(a) for a in all_amounts]))
             cur_match = re.search(r"\b(usd|eur|jpy|gbp)\b", text, re.IGNORECASE)
             if cur_match:
                 currency = cur_match.group(1).upper()
