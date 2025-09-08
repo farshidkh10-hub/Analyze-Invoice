@@ -1,6 +1,4 @@
-import os
 import re
-import tempfile
 from flask import Flask, request, render_template_string
 import fitz  # PyMuPDF
 
@@ -97,16 +95,11 @@ def analyze_invoice():
         return {"error": "No file uploaded"}, 400
 
     try:
-        # ایجاد فایل موقت امن
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp:
-            temp_path = temp.name
-            file.save(temp_path)
-
-        # باز کردن PDF
-        doc = fitz.open(temp_path)
+        # --- خواندن PDF مستقیم از حافظه ---
+        pdf_bytes = file.read()
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         text = "".join([page.get_text("text") + "\n" for page in doc])
         doc.close()
-        os.remove(temp_path)  # حذف فایل موقت
 
         lines = [line.strip() for line in text.split("\n") if line.strip()]
 
@@ -115,11 +108,11 @@ def analyze_invoice():
         for i, line in enumerate(lines):
             for kw in beneficiary_keywords:
                 if kw in line.lower():
-                    parts = re.split(r"[:\-]", line, maxsplit=1)
+                    parts = line.split(":", 1)
                     if len(parts) > 1 and parts[1].strip():
                         beneficiary = parts[1].strip()
-                    elif i + 1 < len(lines):
-                        beneficiary = lines[i + 1].strip()
+                    elif i+1 < len(lines):
+                        beneficiary = lines[i+1].strip()
                     break
             if beneficiary != "Not found":
                 break
@@ -150,7 +143,7 @@ def analyze_invoice():
             if cur_match:
                 currency = cur_match.group(1).upper()
 
-        # --- Banking Information پیشرفته ---
+        # --- Banking Information ---
         bank_name = "Not found"
         bank_address = "Not found"
         swift_code = "Not found"
@@ -176,6 +169,7 @@ def analyze_invoice():
                 else:
                     account_number = l.split(":",1)[-1].strip() if ":" in l else l.strip()
 
+        # fallback روی کل متن
         if bank_name == "Not found":
             bank_match = re.search(r"Bank\s*[:\-]?\s*([\w\s&]+)", text, re.IGNORECASE)
             if bank_match:
@@ -205,5 +199,6 @@ def analyze_invoice():
 
 
 if __name__ == "__main__":
+    import os
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
