@@ -1,3 +1,5 @@
+import traceback
+
 @app.route("/analyze", methods=["POST"])
 def analyze_invoice():
     file = request.files.get("file")
@@ -7,10 +9,18 @@ def analyze_invoice():
     try:
         # --- خواندن PDF مستقیم از حافظه ---
         pdf_bytes = file.read()
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        text = "".join([page.get_text("text") + "\n" for page in doc])
-        doc.close()
+        try:
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        except Exception as pdf_err:
+            return {"error": f"Cannot open PDF: {str(pdf_err)}"}, 400
 
+        try:
+            text = "".join([page.get_text("text") + "\n" for page in doc])
+        except Exception as text_err:
+            doc.close()
+            return {"error": f"Cannot extract text from PDF: {str(text_err)}"}, 400
+
+        doc.close()
         lines = [line.strip() for line in text.split("\n") if line.strip()]
 
         # --- Beneficiary ---
@@ -84,4 +94,6 @@ def analyze_invoice():
         }
 
     except Exception as e:
+        # چاپ کامل Exception در لاگ سرور برای بررسی
+        traceback.print_exc()
         return {"error": str(e)}, 500
