@@ -3,7 +3,7 @@ import re
 import json
 import threading
 from datetime import datetime
-from flask import Flask, request, jsonify
+from flask import Flask, request
 from PyPDF2 import PdfReader, PdfWriter
 from pdf2image import convert_from_path
 import pytesseract
@@ -11,6 +11,18 @@ from pytesseract import Output
 from rapidfuzz import fuzz
 
 app = Flask(__name__)
+
+# ----------------------------
+# دایرکتوری‌ها
+# ----------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PDF_DIR = os.path.join(BASE_DIR, "pdf_storage")
+JSON_DIR = os.path.join(PDF_DIR, "json")
+LOG_DIR = os.path.join(PDF_DIR, "logs")
+TEMP_DIR = os.path.join(PDF_DIR, "temp_pages")
+os.makedirs(JSON_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(TEMP_DIR, exist_ok=True)
 
 # ----------------------------
 # کلیدواژه‌ها و regex
@@ -27,16 +39,9 @@ keywords = {
 
 MATCH_THRESHOLD = 70
 MAX_PART_LENGTH = 100
-LOG_DIR = "./pdf_logs"
-JSON_DIR = "./pdf_json"
-TEMP_DIR = "./temp_pages"
-
-os.makedirs(LOG_DIR, exist_ok=True)
-os.makedirs(JSON_DIR, exist_ok=True)
-os.makedirs(TEMP_DIR, exist_ok=True)
 
 # ----------------------------
-# تقسیم PDF به صفحات جداگانه
+# تقسیم PDF به صفحات
 # ----------------------------
 def split_pdf_to_pages(pdf_path):
     reader = PdfReader(pdf_path)
@@ -44,14 +49,14 @@ def split_pdf_to_pages(pdf_path):
     for i, page in enumerate(reader.pages):
         writer = PdfWriter()
         writer.add_page(page)
-        page_file = os.path.join(TEMP_DIR, f"page_{i+1}.pdf")
+        page_file = os.path.join(TEMP_DIR, f"page_{i+1}_{os.path.basename(pdf_path)}")
         with open(page_file, "wb") as f:
             writer.write(f)
         page_files.append(page_file)
     return page_files
 
 # ----------------------------
-# استخراج متن OCR از یک صفحه PDF
+# OCR صفحه
 # ----------------------------
 def extract_text_from_pdf_page(page_pdf_path):
     images = convert_from_path(page_pdf_path)
@@ -63,7 +68,7 @@ def extract_text_from_pdf_page(page_pdf_path):
     return blocks
 
 # ----------------------------
-# استخراج فیلد با regex و fallback fuzzy
+# استخراج فیلد
 # ----------------------------
 def extract_field(blocks, regex_list):
     for block in blocks:
@@ -105,14 +110,15 @@ def process_pdf_background(pdf_path, output_filename):
             json.dump(results, f, ensure_ascii=False, indent=2)
 
         if problem_flag:
-            log_filename = os.path.join(LOG_DIR, "problem_files.log")
-            with open(log_filename, "a", encoding="utf-8") as logf:
+            log_file = os.path.join(LOG_DIR, "problem_files.log")
+            with open(log_file, "a", encoding="utf-8") as logf:
                 logf.write(f"{output_filename} - {datetime.now().isoformat()}\n")
+
     except Exception as e:
         print(f"Error processing {pdf_path}: {e}")
 
 # ----------------------------
-# مسیر آپلود PDF
+# مسیر آپلود
 # ----------------------------
 @app.route("/", methods=["GET", "POST"])
 def upload_pdf():
@@ -121,20 +127,19 @@ def upload_pdf():
         if not file:
             return "فایلی ارسال نشده"
 
-        pdf_path = os.path.join(TEMP_DIR, file.filename)
+        pdf_path = os.path.join(PDF_DIR, file.filename)
         file.save(pdf_path)
 
-        output_filename = f"{file.filename}_{datetime.now().strftime('%Y%m%d%H%M%S')}.json"
+        output_filename = f"{os.path.splitext(file.filename)[0]}_{datetime.now().strftime('%Y%m%d%H%M%S')}.json"
 
-        # شروع پردازش در پس‌زمینه
         thread = threading.Thread(target=process_pdf_background, args=(pdf_path, output_filename))
         thread.start()
 
         return f'''
         <h3>PDF دریافت شد و پردازش در حال انجام است.</h3>
-        <p>بعد از اتمام، فایل JSON زیر آماده می‌شود:</p>
+        <p>بعد از اتمام، فایل JSON آماده می‌شود:</p>
         <p>{output_filename}</p>
-        <p>می‌توانید این فایل را بعداً بررسی کنید.</p>
+        <p>می‌توانید بعداً این فایل را بررسی کنید.</p>
         '''
 
     return '''
@@ -145,5 +150,9 @@ def upload_pdf():
     </form>
     '''
 
+# ----------------------------
+# اجرای Flask
+# ----------------------------
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
