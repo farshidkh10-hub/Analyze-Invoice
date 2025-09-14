@@ -1,158 +1,79 @@
-import os
 import re
-import json
-import threading
-from datetime import datetime
-from flask import Flask, request
-from PyPDF2 import PdfReader, PdfWriter
-from pdf2image import convert_from_path
-import pytesseract
-from pytesseract import Output
-from rapidfuzz import fuzz
+from flask import Flask, request, render_template_string
+import fitz  # PyMuPDF
+from fuzzywuzzy import fuzz
 
 app = Flask(__name__)
 
 # ----------------------------
-# دایرکتوری‌ها
+# کلیدواژه‌ها (همه lowercase)
 # ----------------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PDF_DIR = os.path.join(BASE_DIR, "pdf_storage")
-JSON_DIR = os.path.join(PDF_DIR, "json")
-LOG_DIR = os.path.join(PDF_DIR, "logs")
-TEMP_DIR = os.path.join(PDF_DIR, "temp_pages")
-os.makedirs(JSON_DIR, exist_ok=True)
-os.makedirs(LOG_DIR, exist_ok=True)
-os.makedirs(TEMP_DIR, exist_ok=True)
-
-# ----------------------------
-# کلیدواژه‌ها و regex
-# ----------------------------
-keywords = {
-    "beneficiary_name": [r"beneficiary['’]?s name[:\s]*([^\n]+)", r"نام ذینفع[:\s]*([^\n]+)"],
-    "bank": [r"bank[:\s]*([^\n]+)", r"نام بانک[:\s]*([^\n]+)", r"banking information[:\s]*([^\n]+)"],
-    "bank_address": [r"bank address[:\s]*([^\n]+)", r"آدرس بانک[:\s]*([^\n]+)"],
-    "account_no": [r"a/c no[:\s]*([^\n]+)", r"account number[:\s]*([^\n]+)", r"شماره حساب[:\s]*([^\n]+)"],
-    "swift": [r"swift code[:\s]*([^\n]+)", r"swift[:\s]*([^\n]+)", r"سوییفت کد[:\s]*([^\n]+)"],
-    "currency": [r"currency[:\s]*([^\n]+)", r"نوع ارز[:\s]*([^\n]+)"],
-    "amount": [r"total[:\s]*([^\n]+)", r"amount[:\s]*([^\n]+)", r"جمع ارز[:\s]*([^\n]+)"],
+fields = {
+    "beneficiary_name": ["beneficiary's name", "beneficiary name", "seller"],
+    "bank_name": ["bank", "banking information"],
+    "bank_address": ["bank address", "add"],
+    "swift_code": ["swift code", "swift"],
+    "currency_type": ["currency type", "type of currency", "currency"],
+    "amount": ["total", "amount"],
+    "account_number": ["a/c no", "account number"]
 }
 
-MATCH_THRESHOLD = 70
-MAX_PART_LENGTH = 100
+# ----------------------------
+# تابع استخراج متن از PDF
+# ----------------------------
+def extract_text(pdf_path):
+    text = ""
+    doc = fitz.open(pdf_path)
+    for page in doc:
+        text += page.get_text()
+    return text
 
 # ----------------------------
-# تقسیم PDF به صفحات
+# تابع پیدا کردن مقدار با fuzzy match
 # ----------------------------
-def split_pdf_to_pages(pdf_path):
-    reader = PdfReader(pdf_path)
-    page_files = []
-    for i, page in enumerate(reader.pages):
-        writer = PdfWriter()
-        writer.add_page(page)
-        page_file = os.path.join(TEMP_DIR, f"page_{i+1}_{os.path.basename(pdf_path)}")
-        with open(page_file, "wb") as f:
-            writer.write(f)
-        page_files.append(page_file)
-    return page_files
+def find_field_value(text, keywords):
+    text_lines = text.splitlines()
+    for line in text_lines:
+        for keyword in keywords:
+            # fuzzy match برای اطمینان از پیدا کردن مشابه‌ترین خط
+            if fuzz.partial_ratio(keyword.lower(), line.lower()) > 80:
+                # مقدار خط بعدی یا بعد از ":" یا "="
+                parts = re.split(r":|=", line)
+                if len(parts) > 1 and parts[1].strip():
+                    return parts[1].strip()
+                elif text_lines.index(line)+1 < len(text_lines):
+                    return text_lines[text_lines.index(line)+1].strip()
+    return "Not Found"
 
 # ----------------------------
-# OCR صفحه
-# ----------------------------
-def extract_text_from_pdf_page(page_pdf_path):
-    images = convert_from_path(page_pdf_path)
-    blocks = []
-    for img in images:
-        text = pytesseract.image_to_string(img, lang="fas+eng", output_type=Output.STRING)
-        if text.strip():
-            blocks.append(text)
-    return blocks
-
-# ----------------------------
-# استخراج فیلد
-# ----------------------------
-def extract_field(blocks, regex_list):
-    for block in blocks:
-        for pattern in regex_list:
-            m = re.search(pattern, block, flags=re.IGNORECASE)
-            if m:
-                return m.group(1).strip(), 100
-    for block in blocks:
-        for i in range(0, len(block), MAX_PART_LENGTH):
-            part = block[i:i+MAX_PART_LENGTH]
-            for pattern in regex_list:
-                key_text = re.sub(r"[:\s]*", "", pattern)[:20]
-                ratio = fuzz.partial_ratio(part.lower(), key_text.lower())
-                if ratio >= MATCH_THRESHOLD:
-                    return part.strip(), ratio
-    return "یافت نشد", 0
-
-# ----------------------------
-# پردازش PDF در پس‌زمینه
-# ----------------------------
-def process_pdf_background(pdf_path, output_filename):
-    try:
-        page_files = split_pdf_to_pages(pdf_path)
-        all_blocks = []
-        for page_file in page_files:
-            blocks = extract_text_from_pdf_page(page_file)
-            all_blocks.extend(blocks)
-
-        results = {}
-        problem_flag = False
-        for field, regex_list in keywords.items():
-            value, confidence = extract_field(all_blocks, regex_list)
-            results[field] = {"value": value, "confidence": f"{confidence}%"}
-            if value == "یافت نشد" or confidence < MATCH_THRESHOLD:
-                problem_flag = True
-
-        json_filename = os.path.join(JSON_DIR, output_filename)
-        with open(json_filename, "w", encoding="utf-8") as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-
-        if problem_flag:
-            log_file = os.path.join(LOG_DIR, "problem_files.log")
-            with open(log_file, "a", encoding="utf-8") as logf:
-                logf.write(f"{output_filename} - {datetime.now().isoformat()}\n")
-
-    except Exception as e:
-        print(f"Error processing {pdf_path}: {e}")
-
-# ----------------------------
-# مسیر آپلود
+# مسیر اصلی Flask
 # ----------------------------
 @app.route("/", methods=["GET", "POST"])
-def upload_pdf():
+def index():
+    result = {}
     if request.method == "POST":
-        file = request.files.get("pdf_file")
-        if not file:
-            return "فایلی ارسال نشده"
+        pdf_file = request.files["pdf_file"]
+        if pdf_file:
+            text = extract_text(pdf_file)
+            for field, keywords in fields.items():
+                result[field] = find_field_value(text, keywords)
 
-        pdf_path = os.path.join(PDF_DIR, file.filename)
-        file.save(pdf_path)
-
-        output_filename = f"{os.path.splitext(file.filename)[0]}_{datetime.now().strftime('%Y%m%d%H%M%S')}.json"
-
-        thread = threading.Thread(target=process_pdf_background, args=(pdf_path, output_filename))
-        thread.start()
-
-        return f'''
-        <h3>PDF دریافت شد و پردازش در حال انجام است.</h3>
-        <p>بعد از اتمام، فایل JSON آماده می‌شود:</p>
-        <p>{output_filename}</p>
-        <p>می‌توانید بعداً این فایل را بررسی کنید.</p>
-        '''
-
-    return '''
-    <h2>آپلود PDF</h2>
+    html = """
+    <h2>PDF Information Extractor</h2>
     <form method="POST" enctype="multipart/form-data">
-        <input type="file" name="pdf_file">
-        <input type="submit" value="بررسی PDF">
+        <input type="file" name="pdf_file" required>
+        <input type="submit" value="Extract">
     </form>
-    '''
+    {% if result %}
+        <h3>Extracted Data:</h3>
+        <ul>
+        {% for key, value in result.items() %}
+            <li><b>{{ key.replace('_',' ').title() }}:</b> {{ value }}</li>
+        {% endfor %}
+        </ul>
+    {% endif %}
+    """
+    return render_template_string(html, result=result)
 
-# ----------------------------
-# اجرای Flask
-# ----------------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(debug=True)
