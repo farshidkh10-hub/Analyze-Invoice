@@ -3,36 +3,23 @@ import fitz  # PyMuPDF
 from flask import Flask, request, render_template_string
 from rapidfuzz import fuzz
 
+# برای OCR
+import pytesseract
+from pdf2image import convert_from_bytes
+
 app = Flask(__name__)
 
 # ----------------------------
 # کلیدواژه‌ها
 # ----------------------------
-beneficiary_keywords = [
-    "beneficiary", "beneficiary name", "beneficiary's name", 
-    "receiver", "payee", "seller"
-]
-
-bank_keywords = [
-    "bank", "bank name", "issuing bank", "beneficiary bank", 
-    "banking information", "bank address"
-]
-
-account_keywords = [
-    "account no", "a/c no", "iban", "account number", "acc no"
-]
-
-swift_keywords = [
-    "swift", "swift code", "bic", "bic code"
-]
-
-currency_keywords = [
-    "currency", "curr", "payment currency", "type of currency"
-]
-
-amount_keywords = [
-    "amount", "total amount", "invoice amount", "total", "sum"
-]
+keywords_map = {
+    "Beneficiary": ["beneficiary", "beneficiary name", "payee", "receiver", "seller"],
+    "Bank": ["bank", "bank name", "issuing bank", "beneficiary bank", "banking information", "bank address"],
+    "Account No": ["account no", "a/c no", "iban", "account number", "acc no"],
+    "SWIFT Code": ["swift", "swift code", "bic", "bic code"],
+    "Currency": ["currency", "curr", "payment currency", "type of currency"],
+    "Amount": ["amount", "total amount", "invoice amount", "total", "sum"]
+}
 
 # ----------------------------
 # توابع کمکی
@@ -42,7 +29,6 @@ def normalize(text):
 
 
 def match_keyword(text, keywords, threshold=75):
-    """بررسی شباهت متن با کلیدواژه‌ها"""
     for kw in keywords:
         if fuzz.partial_ratio(kw, text) >= threshold:
             return kw
@@ -50,52 +36,51 @@ def match_keyword(text, keywords, threshold=75):
 
 
 def extract_value(line, keyword):
-    """گرفتن مقدار بعد از کلیدواژه یا علامت :"""
-    # اگه با : یا - جدا شده باشه
+    """مقدار بعد از کلیدواژه یا خط بعدی"""
     pattern = re.compile(rf"{re.escape(keyword)}[:\-]?\s*(.*)", re.IGNORECASE)
     match = pattern.search(line)
-    if match:
+    if match and match.group(1).strip():
         return match.group(1).strip()
-    # اگر فقط کلیدواژه تو خط باشه و مقدار بعدش بیاد
-    words = line.split()
-    if keyword.lower() in line.lower():
-        idx = line.lower().index(keyword.lower()) + len(keyword)
-        return line[idx:].strip(" :.-")
-    return line.strip()
+    return ""
 
 
 def extract_info(text):
-    """استخراج اطلاعات مهم از متن PDF"""
-    results = {
-        "Beneficiary": "",
-        "Bank": "",
-        "Account No": "",
-        "SWIFT Code": "",
-        "Currency": "",
-        "Amount": ""
-    }
-
+    # هر فیلد یه لیست میشه
+    results = {k: [] for k in keywords_map.keys()}
     lines = text.split("\n")
-    for line in lines:
+
+    for i, line in enumerate(lines):
         norm_line = normalize(line)
-
-        if kw := match_keyword(norm_line, beneficiary_keywords):
-            results["Beneficiary"] = extract_value(line, kw)
-        elif kw := match_keyword(norm_line, bank_keywords):
-            results["Bank"] = extract_value(line, kw)
-        elif kw := match_keyword(norm_line, account_keywords):
-            results["Account No"] = extract_value(line, kw)
-        elif kw := match_keyword(norm_line, swift_keywords):
-            results["SWIFT Code"] = extract_value(line, kw)
-        elif kw := match_keyword(norm_line, currency_keywords):
-            results["Currency"] = extract_value(line, kw)
-        elif kw := match_keyword(norm_line, amount_keywords):
-            results["Amount"] = extract_value(line, kw)
-
+        for field, kw_list in keywords_map.items():
+            if kw := match_keyword(norm_line, kw_list):
+                value = extract_value(line, kw)
+                if not value and i + 1 < len(lines):
+                    # مقدار در خط بعدی
+                    value = lines[i + 1].strip()
+                if value and value not in results[field]:
+                    results[field].append(value)
     return results
 
+
+def read_pdf(file_bytes):
+    """اول متن مستقیم، اگه ناقص بود OCR"""
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    text = ""
+    for page in doc:
+        text += page.get_text("text") + "\n"
+
+    # اگر متن خالی یا خیلی کوتاه بود → OCR
+    if len(text.strip()) < 50:
+        images = convert_from_bytes(file_bytes)
+        ocr_text = ""
+        for img in images:
+            ocr_text += pytesseract.image_to_string(img, lang="eng") + "\n"
+        return ocr_text
+    return text
+
+
 # ----------------------------
-# روت‌ها
+# روت
 # ----------------------------
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -103,11 +88,8 @@ def index():
     if request.method == "POST":
         file = request.files["file"]
         if file:
-            doc = fitz.open(stream=file.read(), filetype="pdf")
-            text = ""
-            for page in doc:
-                text += page.get_text("text") + "\n"
-
+            file_bytes = file.read()
+            text = read_pdf(file_bytes)
             data = extract_info(text)
 
     return render_template_string("""
@@ -120,8 +102,14 @@ def index():
         {% if data %}
             <h3>نتایج:</h3>
             <ul>
-                {% for key, value in data.items() %}
-                    <li><b>{{ key }}</b>: {{ value }}</li>
+                {% for key, values in data.items() %}
+                    <li><b>{{ key }}</b>:
+                        <ul>
+                            {% for v in values %}
+                                <li>{{ v }}</li>
+                            {% endfor %}
+                        </ul>
+                    </li>
                 {% endfor %}
             </ul>
         {% endif %}
