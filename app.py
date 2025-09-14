@@ -1,8 +1,9 @@
 import os
 import re
 import json
+import threading
 from datetime import datetime
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from PyPDF2 import PdfReader, PdfWriter
 from pdf2image import convert_from_path
 import pytesseract
@@ -50,7 +51,7 @@ def split_pdf_to_pages(pdf_path):
     return page_files
 
 # ----------------------------
-# استخراج متن با OCR از یک صفحه PDF
+# استخراج متن OCR از یک صفحه PDF
 # ----------------------------
 def extract_text_from_pdf_page(page_pdf_path):
     images = convert_from_path(page_pdf_path)
@@ -65,13 +66,11 @@ def extract_text_from_pdf_page(page_pdf_path):
 # استخراج فیلد با regex و fallback fuzzy
 # ----------------------------
 def extract_field(blocks, regex_list):
-    # regex اول
     for block in blocks:
         for pattern in regex_list:
             m = re.search(pattern, block, flags=re.IGNORECASE)
             if m:
                 return m.group(1).strip(), 100
-    # fallback fuzzy روی بخش کوتاه
     for block in blocks:
         for i in range(0, len(block), MAX_PART_LENGTH):
             part = block[i:i+MAX_PART_LENGTH]
@@ -83,23 +82,11 @@ def extract_field(blocks, regex_list):
     return "یافت نشد", 0
 
 # ----------------------------
-# مسیر آپلود PDF
+# پردازش PDF در پس‌زمینه
 # ----------------------------
-@app.route("/", methods=["GET", "POST"])
-def upload_pdf():
-    if request.method == "POST":
-        file = request.files.get("pdf_file")
-        if not file:
-            return "فایلی ارسال نشده"
-
-        # ذخیره PDF اصلی
-        pdf_path = os.path.join(TEMP_DIR, file.filename)
-        file.save(pdf_path)
-
-        # تقسیم به صفحات
+def process_pdf_background(pdf_path, output_filename):
+    try:
         page_files = split_pdf_to_pages(pdf_path)
-
-        # پردازش هر صفحه OCR و جمع‌آوری بلوک‌ها
         all_blocks = []
         for page_file in page_files:
             blocks = extract_text_from_pdf_page(page_file)
@@ -113,28 +100,42 @@ def upload_pdf():
             if value == "یافت نشد" or confidence < MATCH_THRESHOLD:
                 problem_flag = True
 
-        # ذخیره JSON
-        json_filename = os.path.join(JSON_DIR, f"{file.filename}_{datetime.now().strftime('%Y%m%d%H%M%S')}.json")
+        json_filename = os.path.join(JSON_DIR, output_filename)
         with open(json_filename, "w", encoding="utf-8") as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
 
-        # لاگ فایل مشکل‌دار
         if problem_flag:
             log_filename = os.path.join(LOG_DIR, "problem_files.log")
             with open(log_filename, "a", encoding="utf-8") as logf:
-                logf.write(f"{file.filename} - {datetime.now().isoformat()}\n")
+                logf.write(f"{output_filename} - {datetime.now().isoformat()}\n")
+    except Exception as e:
+        print(f"Error processing {pdf_path}: {e}")
 
-        # خروجی HTML
-        html = "<h2>نتایج استخراج PDF (صفحه به صفحه)</h2><table border=1 cellpadding=5>"
-        html += "<tr><th>فیلد</th><th>مقدار</th><th>درصد اطمینان</th></tr>"
-        for k, v in results.items():
-            html += f"<tr><td>{k}</td><td>{v['value']}</td><td>{v['confidence']}</td></tr>"
-        html += "</table>"
-        html += f"<p>JSON ذخیره شد: {json_filename}</p>"
-        if problem_flag:
-            html += "<p style='color:red;'>برخی فیلدها پیدا نشد یا اطمینان پایین بود. فایل در لاگ ثبت شد.</p>"
+# ----------------------------
+# مسیر آپلود PDF
+# ----------------------------
+@app.route("/", methods=["GET", "POST"])
+def upload_pdf():
+    if request.method == "POST":
+        file = request.files.get("pdf_file")
+        if not file:
+            return "فایلی ارسال نشده"
 
-        return html
+        pdf_path = os.path.join(TEMP_DIR, file.filename)
+        file.save(pdf_path)
+
+        output_filename = f"{file.filename}_{datetime.now().strftime('%Y%m%d%H%M%S')}.json"
+
+        # شروع پردازش در پس‌زمینه
+        thread = threading.Thread(target=process_pdf_background, args=(pdf_path, output_filename))
+        thread.start()
+
+        return f'''
+        <h3>PDF دریافت شد و پردازش در حال انجام است.</h3>
+        <p>بعد از اتمام، فایل JSON زیر آماده می‌شود:</p>
+        <p>{output_filename}</p>
+        <p>می‌توانید این فایل را بعداً بررسی کنید.</p>
+        '''
 
     return '''
     <h2>آپلود PDF</h2>
