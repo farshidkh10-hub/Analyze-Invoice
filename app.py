@@ -2,11 +2,12 @@ import re
 from flask import Flask, request, render_template_string
 import fitz  # PyMuPDF
 from fuzzywuzzy import fuzz
+import tempfile
 
 app = Flask(__name__)
 
 # ----------------------------
-# کلیدواژه‌ها (همه lowercase)
+# کلیدواژه‌ها
 # ----------------------------
 fields = {
     "beneficiary_name": ["beneficiary's name", "beneficiary name", "seller"],
@@ -21,11 +22,15 @@ fields = {
 # ----------------------------
 # تابع استخراج متن از PDF
 # ----------------------------
-def extract_text(pdf_path):
+def extract_text(file_storage):
     text = ""
-    doc = fitz.open(pdf_path)
-    for page in doc:
-        text += page.get_text()
+    # فایل آپلودی رو موقت ذخیره می‌کنیم
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        file_storage.save(tmp.name)
+        doc = fitz.open(tmp.name)
+        for page in doc:
+            text += page.get_text()
+        doc.close()
     return text
 
 # ----------------------------
@@ -33,16 +38,14 @@ def extract_text(pdf_path):
 # ----------------------------
 def find_field_value(text, keywords):
     text_lines = text.splitlines()
-    for line in text_lines:
+    for idx, line in enumerate(text_lines):
         for keyword in keywords:
-            # fuzzy match برای اطمینان از پیدا کردن مشابه‌ترین خط
             if fuzz.partial_ratio(keyword.lower(), line.lower()) > 80:
-                # مقدار خط بعدی یا بعد از ":" یا "="
                 parts = re.split(r":|=", line)
                 if len(parts) > 1 and parts[1].strip():
                     return parts[1].strip()
-                elif text_lines.index(line)+1 < len(text_lines):
-                    return text_lines[text_lines.index(line)+1].strip()
+                elif idx + 1 < len(text_lines):
+                    return text_lines[idx+1].strip()
     return "Not Found"
 
 # ----------------------------
@@ -52,7 +55,7 @@ def find_field_value(text, keywords):
 def index():
     result = {}
     if request.method == "POST":
-        pdf_file = request.files["pdf_file"]
+        pdf_file = request.files.get("pdf_file")
         if pdf_file:
             text = extract_text(pdf_file)
             for field, keywords in fields.items():
