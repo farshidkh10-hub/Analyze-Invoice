@@ -45,20 +45,21 @@ def extract_value(line, keyword):
 
 
 def extract_info(text):
-    # هر فیلد یه لیست میشه
-    results = {k: [] for k in keywords_map.keys()}
+    # پیش‌فرض: همه فیلدها = "یافت نشد"
+    results = {k: "یافت نشد" for k in keywords_map.keys()}
     lines = text.split("\n")
 
     for i, line in enumerate(lines):
         norm_line = normalize(line)
         for field, kw_list in keywords_map.items():
+            if results[field] != "یافت نشد":  # اگر پر شده، بیخیال
+                continue
             if kw := match_keyword(norm_line, kw_list):
                 value = extract_value(line, kw)
                 if not value and i + 1 < len(lines):
-                    # مقدار در خط بعدی
                     value = lines[i + 1].strip()
-                if value and value not in results[field]:
-                    results[field].append(value)
+                if value:
+                    results[field] = value
     return results
 
 
@@ -100,18 +101,16 @@ def index():
         </form>
 
         {% if data %}
-            <h3>نتایج:</h3>
-            <ul>
-                {% for key, values in data.items() %}
-                    <li><b>{{ key }}</b>:
-                        <ul>
-                            {% for v in values %}
-                                <li>{{ v }}</li>
-                            {% endfor %}
-                        </ul>
-                    </li>
+            <h3>ویژگی‌های اصلی:</h3>
+            <table border="1" cellpadding="5" cellspacing="0">
+                <tr><th>فیلد</th><th>مقدار</th></tr>
+                {% for key, value in data.items() %}
+                    <tr>
+                        <td><b>{{ key }}</b></td>
+                        <td>{{ value }}</td>
+                    </tr>
                 {% endfor %}
-            </ul>
+            </table>
         {% endif %}
     """, data=data)
 
